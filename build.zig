@@ -12,8 +12,11 @@ pub fn build(b: *std.build.Builder) void {
     const mode = b.standardReleaseOptions();
 
     const exe = b.addExecutable("crisp-8", "src/main.zig");
+    exe.linkSystemLibrary("SDL2");
+    exe.linkSystemLibrary("c");
     exe.setTarget(target);
     exe.setBuildMode(mode);
+    exe.linkLibC();
     exe.install();
 
     const run_cmd = exe.run();

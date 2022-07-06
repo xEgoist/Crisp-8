@@ -1,6 +1,11 @@
 const std = @import("std");
-const expectEqual = std.testing.expectEqual;
+const c = @cImport({
+  @cInclude("SDL2/SDL.h");
+});
 
+
+const expectEqual = std.testing.expectEqual;
+//const sdl = @import("sdl2");
 const MEM_SIZE: u16 = 0x1000;
 
 const SCREEN_WIDTH: u16 = 64;
@@ -38,7 +43,7 @@ c: u8,
 x: u8,
 y: u8,
 d: u8,
-nn: u16,
+nn: u8,
 nnn: u16,
 };
 
@@ -52,7 +57,7 @@ sp: u8 = 0,
 dt: u8 = 0,
 st: u8 = 0,
 keypad: [16]u8 = [_]u8{0} ** 16,
-fb: [SCREEN_HEIGHT*SCREEN_WIDTH]u16 = [_]u16 {0} ** (SCREEN_WIDTH * SCREEN_HEIGHT),
+fb: [SCREEN_HEIGHT*SCREEN_WIDTH]u8 = [_]u8 {0} ** (SCREEN_HEIGHT * SCREEN_WIDTH),
 tone: bool = false,
 time: isize = 0,
   
@@ -66,7 +71,7 @@ time: isize = 0,
   // Clear Screen
   fn cls(self: *Chip8) void {
     comptime { 
-    self.fb = [_]u16 {0} ** (SCREEN_WIDTH * SCREEN_HEIGHT);
+    self.fb = [_]u8 {0} ** (SCREEN_WIDTH * SCREEN_HEIGHT );
     }
   }
   // return from subroutine
@@ -235,22 +240,28 @@ time: isize = 0,
     var xpos = self.v[x] % SCREEN_WIDTH;
     var ypos = self.v[y] % SCREEN_HEIGHT;
     self.v[0xF] = 0;
-    var row = 0;
+    var row: u8 = 0;
 
     while (row < nibble) : (row +=1) {
-      var col = 0;
-      var sprite_byte = self.mem[self.i + row];
-      while (col < 8) : (col +=1) {
-        var sprite_pixel = sprite_byte & (0x80 >> col);
-        var screen_pixel = *self.fb[(ypos + row) * SCREEN_WIDTH + (xpos + col)];
-        if (sprite_pixel == 1) {
-          if (screen_pixel.* == 0xFFFFFFFF) {
+      var col:u8 = 0;
+      var sprite_byte: u8 = self.mem[self.i + row];
+      while (col < 8) : (col += 1) {
+        // Had to name it that way because this annoyed the shit out of me
+        var shifted_ballsack: u8 = std.math.shr(u8,0x80,col);
+        var sprite_pixel: u8 = sprite_byte & shifted_ballsack;
+        var screen_pixel = &self.fb[((ypos + row) * SCREEN_WIDTH) + (xpos + col)];
+        if (sprite_pixel != 0) {
+          if (screen_pixel.* == 1) {
             self.v[0xF] = 1;
           }
-          screen_pixel.* ^= 0xFFFFFFFF;
+          screen_pixel.* ^= 1;
+          std.debug.print("{}",.{screen_pixel.*});
         }
+
+        //self.fb = [_]u16 {255} ** ;
       }
     }
+    //std.debug.print("!!!!!!{any}!!!!!!",.{self.fb});
   }
   //ex9e
   fn skpx(self: *Chip8, x: u8) void {
@@ -274,7 +285,7 @@ time: isize = 0,
 
   //fx0A
   fn ldxk(self: *Chip8, x: u8) void {
-    var k = 0;
+    var k: u8 = 0;
     while (k <= 15) : (k += 1) {
       if (self.keypad[k] == 1) {
         self.v[x] = k;
@@ -331,40 +342,94 @@ time: isize = 0,
   
 
 
+  fn loadRom(self: *Chip8, data: []const u8) void {
+    @memcpy(self.mem[0x200..], @ptrCast([*]const u8, data[0..]), data.len);
+    self.pc  = 0x200;
+  }
 
-
-  fn run(self: *Chip8) C8Error!void {
-    while (true){
+  fn run(self: *Chip8, quit_flag: *bool) C8Error!void {
     var opcode = self.read_opcode();
-    self.pc +=2;
+    self.pc += 2;
     var comps = Components {
     .c = @intCast(u8,((opcode & 0xF000) >> 12)),
     .x = @intCast(u8,(opcode & 0x0F00) >> 8),
     .y = @intCast(u8,(opcode & 0x00F0) >> 4),
     .d = @intCast(u8,(opcode & 0x000F) >> 0),
-    .nn = opcode & 0xFF,
+    .nn = @intCast(u8,opcode & 0xFF),
     .nnn = opcode & 0xFFF,
     };
     if (comps.c == 0 and comps.x == 0 and comps.y == 0 and comps.d == 0) {
-      //std.debug.print("DONE..\n", .{});
-        return;
+      std.debug.print("DONE..\n", .{});
+        quit_flag.* = true;
     }
 
     if (comps.c == 0 and comps.x == 0 and comps.y == 0xE and comps.d == 0xE) {
 
-      //std.debug.print("return..\n", .{});
+     std.debug.print("return..\n", .{});
         try self.ret();
-        continue;
+    }
+    if (comps.c == 0x1) {
+      
+      std.debug.print("JMP..\n", .{});
+      self.jp(comps.nnn);
+
     }
     if (comps.c == 0x2 ) {
-      //std.debug.print("NNNN..\n", .{});
+      std.debug.print("NNNN..\n", .{});
         try self.call(comps.nnn);
     }
-    if (comps.c == 0x8 and comps.d == 0x4) {
-      //std.debug.print("ADDING..\n", .{});
-      self.addxy(comps.x,comps.y);
-      continue;
+    if (comps.c == 0x3) {
+      std.debug.print("3xkk\n",.{});
+      self.sex(comps.x,comps.nn);
+
     }
+    if (comps.c == 0x8 and comps.d == 0x4) {
+      std.debug.print("ADDING..\n", .{});
+      self.addxy(comps.x,comps.y);
+    }
+    //dxyn
+    if (comps.c == 0xD) {
+      std.debug.print("DRW..\n", .{});
+      self.drwxyn(comps.x,comps.y,comps.d);
+    }
+    //6xkk
+    if (comps.c == 0x6) {
+      std.debug.print("!!6xkk!!\n",.{});
+      self.ldx(comps.x, comps.nn);
+    }
+    //Annn
+    if (comps.c == 0xa) {
+      std.debug.print("!!Annn!!\n",.{});
+      self.ldi(comps.nnn);
+    }
+    //fx0a
+    if (comps.c == 0xf and comps.y == 0x0 and comps.d == 0xa) {
+
+      //self.ldxk(comps.x);
+    }
+    //fx18
+    if (comps.c == 0xf and comps.y == 0x1 and comps.d == 0x8) {
+      std.debug.print("!!fx18!!\n",.{});
+      self.ldstx(comps.x);
+    }
+
+    //fx29
+    if (comps.c == 0xf and comps.y == 0x2 and comps.d == 0x9) {
+      std.debug.print("!!fx28!!\n",.{});
+      self.ldfx(comps.x);
+    }
+    if (comps.c == 0x0 and comps.x == 0x0 and comps.y == 0xE and comps.d == 0) {
+      std.debug.print("!!cls!!\n",.{});
+      self.cls();
+    }
+
+    //7xkk
+    if (comps.c == 0x7) {
+    std.debug.print("7xkk",.{});
+    self.addx(comps.x,comps.nn);
+
+    }
+
     if (self.dt > 0) {
       self.dt -=1;
     }
@@ -372,38 +437,98 @@ time: isize = 0,
       self.st -=1;
     }
   }
-  }
 };
 
+
+
+
 pub fn main() anyerror!void {
- comptime var cpu = Chip8{
+
+//var screen = try sdl_utils.Render.render_init("CHIP 8"); 
+//defer screen.drop();
+
+// BEGIN SCREEN
+
+  if (c.SDL_Init(c.SDL_INIT_VIDEO) != 0) {
+        c.SDL_Log("Unable to initialize SDL: %s", c.SDL_GetError());
+        return error.SDLInitializationFailed;
+    }
+  defer c.SDL_Quit();
+  const screen = c.SDL_CreateWindow("CHIP-8", c.SDL_WINDOWPOS_CENTERED, c.SDL_WINDOWPOS_CENTERED, SCREEN_WIDTH * 10, SCREEN_HEIGHT * 10, c.SDL_WINDOW_OPENGL) orelse {
+           c.SDL_Log("Unable to create window: %s", c.SDL_GetError());
+           return error.SDLInitializationFailed;
+
   };
- cpu.v[0] = 5;
- cpu.v[1] = 10;
- 
- cpu.mem[0x000] = 0x21; 
- cpu.mem[0x001] = 0x00; 
- 
- cpu.mem[0x002] = 0x21; 
- cpu.mem[0x003] = 0x00; 
- 
- cpu.mem[0x004] = 0x21; 
- cpu.mem[0x005] = 0x00; 
- 
- cpu.mem[0x006] = 0x00; 
- cpu.mem[0x007] = 0x00; 
- 
- cpu.mem[0x100] = 0x80; 
- cpu.mem[0x101] = 0x14; 
- cpu.mem[0x102] = 0x80; 
- cpu.mem[0x103] = 0x14; 
- cpu.mem[0x104] = 0x00; 
- cpu.mem[0x105] = 0xEE;
+  defer c.SDL_DestroyWindow(screen);
 
- //std.debug.print("{any}",.{cpu.mem});
- try comptime cpu.run();
- std.debug.print("{}",.{cpu.v[0]});
+const renderer = c.SDL_CreateRenderer(screen, -1, 0) orelse {
+        c.SDL_Log("Unable to create renderer: %s", c.SDL_GetError());
+        return error.SDLInitializationFailed;
+    };
+    defer c.SDL_DestroyRenderer(renderer);
+  const texture = c.SDL_CreateTexture(renderer, c.SDL_PIXELFORMAT_RGBA8888, c.SDL_TEXTUREACCESS_STATIC, SCREEN_WIDTH, SCREEN_HEIGHT);
+      defer c.SDL_DestroyTexture(texture);
 
+
+
+
+
+// BEGIN CPU 
+ var cpu = Chip8{
+  };
+ if (std.os.argv.len > 1) {
+        std.log.info("loading rom from {s}", .{std.os.argv[1]});
+        const file = try std.fs.cwd().openFile(
+            std.mem.span(std.os.argv[1]),
+            .{.mode = std.fs.File.OpenMode.read_only},
+        );
+        defer file.close();
+        var data: [4096]u8 = undefined;
+        const n = try file.readAll(&data);
+        cpu.loadRom(data[0..n]);
+ } 
+ else {
+        std.log.info("no rom specified", .{});
+ }
+
+ var flag = false;
+ //RM
+ //cpu.fb = [_]u16 {120} ** (SCREEN_WIDTH * SCREEN_HEIGHT * @sizeOf(u32)); 
+ // var tt =  [_]u8 {0} ** (SCREEN_HEIGHT * SCREEN_WIDTH * @sizeOf(u32));
+  var tt =  [_]u32 {0} ** (SCREEN_HEIGHT * SCREEN_WIDTH  );
+ screenloop: while (!flag) {
+
+  _ = c.SDL_UpdateTexture(texture, null, @ptrCast(*const anyopaque, &tt), SCREEN_WIDTH * @sizeOf(u32));
+  _ = c.SDL_RenderCopy(renderer, texture, null, null);
+  _ = c.SDL_RenderPresent(renderer);
+ //screen.update_sdl(&tt, SCREEN_WIDTH * @sizeOf(u32));
+        var event: c.SDL_Event = undefined;
+        while(c.SDL_PollEvent(&event) != 0) {
+            switch(event.type) {
+                c.SDL_QUIT => break :screenloop,
+                else => {}
+            }
+    }
+        try cpu.run(&flag);
+        _ = c.SDL_Delay(1000);
+        drawme(&cpu.fb, &tt);
+        std.debug.print("{any}", .{tt});
+
+ }
+
+}
+
+
+// draw me 
+fn drawme(cpu_fb: *[2048]u8, target: *[2048]u32) void {
+ for (target) |*val, idx| {
+    if (cpu_fb[idx] == 0) {
+      val.* = 0x000000FF;
+    }
+    else {
+      val.* = 0xFFFFFFFF;
+    }
+ }
 }
 
 
