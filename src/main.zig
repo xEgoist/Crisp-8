@@ -10,7 +10,15 @@ const MEM_SIZE: u16 = 0x1000;
 const SCREEN_WIDTH: u16 = 64;
 const SCREEN_HEIGHT: u16 = 32;
 const FONTSET_START_ADDRESS: u16 = 0x50;
-const FPS = 14;
+
+const FPS = 1000;
+const SDL_KEYS = [_]c.SDL_Keycode {
+   c.SDLK_x,c.SDLK_1,c.SDLK_2,c.SDLK_3,   // 0 1 2 3
+   c.SDLK_q,c.SDLK_w,c.SDLK_e,c.SDLK_a,   // 4 5 6 7
+   c.SDLK_s,c.SDLK_d,c.SDLK_z,c.SDLK_c,   // 8 9 A B
+   c.SDLK_4,c.SDLK_r,c.SDLK_f,c.SDLK_v,  // C D E F
+  };
+
 const FONTS = [_]u8{
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
     0x20, 0x60, 0x20, 0x20, 0x70, // 1
@@ -118,14 +126,14 @@ const Chip8 = struct {
     }
     //3xkk
     fn sex(self: *Chip8, x: u8, kk: u8) void {
-        if (self.v[x] == self.v[kk]) {
+        if (self.v[x] == kk) {
             self.pc += 2;
         }
     }
 
     //4xkk
     fn snex(self: *Chip8, x: u8, kk: u8) void {
-        if (self.v[x] != self.v[kk]) {
+        if (self.v[x] != kk) {
             self.pc += 2;
         }
     }
@@ -142,7 +150,7 @@ const Chip8 = struct {
     //7xkk
     // note, this has no carry.
     fn addx(self: *Chip8, x: u8, kk: u8) void {
-        self.v[x] += kk;
+        self.v[x] +%= kk;
     }
 
     // 8xy0
@@ -158,6 +166,10 @@ const Chip8 = struct {
     // 8xy2
     fn andxy(self: *Chip8, x: u8, y: u8) void {
         self.v[x] &= self.v[y];
+    }
+
+    fn xorxy(self: *Chip8, x: u8, y: u8) void {
+        self.v[x] ^= self.v[y];
     }
 
     // 8xy5
@@ -215,7 +227,7 @@ const Chip8 = struct {
     }
 
     //Cxkk
-    fn rndvx(self: *Chip8, x: u8, kk: u8) void {
+    fn rndx(self: *Chip8, x: u8, kk: u8) void {
         var seed = std.time.timestamp();
         if (seed < 0) {
             seed = 42;
@@ -226,8 +238,8 @@ const Chip8 = struct {
     }
     //dxyn
     fn drwxyn(self: *Chip8, x: u8, y: u8, nibble: u8) void {
-        var xpos = self.v[x] % SCREEN_WIDTH;
-        var ypos = self.v[y] % SCREEN_HEIGHT;
+        var xpos = self.v[x];
+        var ypos = self.v[y];
         self.v[0xF] = 0;
         var row: u8 = 0;
 
@@ -238,19 +250,17 @@ const Chip8 = struct {
                 // Had to name it that way because this annoyed the shit out of me
                 var shifted_ballsack: u8 = std.math.shr(u8, 0x80, col);
                 var sprite_pixel: u8 = sprite_byte & shifted_ballsack;
-                var screen_pixel = &self.fb[((ypos + row) * SCREEN_WIDTH) + (xpos + col)];
+                var screen_pixel = &self.fb[(((ypos + row) * SCREEN_WIDTH) + (xpos + col)) % (SCREEN_WIDTH * SCREEN_HEIGHT)];
                 if (sprite_pixel != 0) {
                     if (screen_pixel.* == 1) {
+                        std.log.info("COLLISION!!\n",.{});
                         self.v[0xF] = 1;
                     }
                     screen_pixel.* ^= 1;
-                    //std.debug.print("{}",.{screen_pixel.*});
                 }
 
-                //self.fb = [_]u16 {255} ** ;
             }
         }
-        //std.debug.print("!!!!!!{any}!!!!!!",.{self.fb});
     }
     //ex9e
     fn skpx(self: *Chip8, x: u8) void {
@@ -344,73 +354,91 @@ const Chip8 = struct {
             .nn = @intCast(u8, opcode & 0xFF),
             .nnn = opcode & 0xFFF,
         };
-        if (comps.c == 0 and comps.x == 0 and comps.y == 0 and comps.d == 0) {
-            std.log.info("DONE..\n", .{});
-            quit_flag.* = true;
-        }
-
-        if (comps.c == 0 and comps.x == 0 and comps.y == 0xE and comps.d == 0xE) {
-            std.log.info("return..\n", .{});
-            try self.ret();
-        }
-        if (comps.c == 0x1) {
-            std.log.info("JMP..\n", .{});
-            self.jp(comps.nnn);
-        }
-        if (comps.c == 0x2) {
-            std.log.info("NNNN..\n", .{});
-            try self.call(comps.nnn);
-        }
-        if (comps.c == 0x3) {
-            std.log.info("3xkk\n", .{});
-            self.sex(comps.x, comps.nn);
-        }
-        if (comps.c == 0x8 and comps.d == 0x4) {
-            std.log.info("ADDING..\n", .{});
-            self.addxy(comps.x, comps.y);
-        }
-        //dxyn
-        if (comps.c == 0xD) {
+        switch (comps.c) {
+          0x0 => {
+            if (comps.x == 0x0 and comps.y == 0xE and comps.d == 0x0) {
+              self.cls();
+            } else if (comps.x == 0x0 and comps.y == 0xE and comps.d == 0xE) {
+             try self.ret(); 
+            } else if (comps.x == 0x0 and comps.y == 0x0 and comps.d == 0x0) {
+              quit_flag.* = true;
+            }
+          },
+          0x1 => self.jp(comps.nnn),
+          0x2 => try self.call(comps.nnn),
+          0x3 => self.sex(comps.x,comps.nn),
+          0x4 => self.snex(comps.x, comps.nn),
+          0x5 => {
+            if (comps.d == 0) {
+              self.sexy(comps.x, comps.y);
+            }
+          },
+          0x6 => self.ldx(comps.x,comps.nn),
+          0x7 => self.addx(comps.x,comps.nn),
+          0x8 => {
+              switch (comps.d) {
+                0x0 => self.ldxy(comps.x,comps.y),
+                0x1 => self.orxy(comps.x, comps.y),
+                0x2 => self.andxy(comps.x, comps.y),
+                0x3 => self.xorxy(comps.x, comps.y),
+                0x4 => self.addxy(comps.x,comps.y),
+                0x5 => self.subxy(comps.x, comps.y),
+                0x6 => self.shrx(comps.x),
+                0x7 => self.subnxy(comps.x, comps.y),
+                0xE => self.shlx(comps.x),
+               else => return C8Error.UnImplemented,
+              }
+          },
+         0x9 => {
+            if (comps.d == 0) {
+              self.snexy(comps.x, comps.y);
+            }
+         },
+         0xA => self.ldi(comps.nnn),
+         0xB => self.jpv0(comps.nnn),
+         0xC => self.rndx(comps.x, comps.nn),
+         0xD => {
             self.drawfg = true;
             std.log.info("DRW..\n", .{});
             self.drwxyn(comps.x, comps.y, comps.d);
-        }
-        //6xkk
-        if (comps.c == 0x6) {
-            std.log.info("!!6xkk!!\n", .{});
-            self.ldx(comps.x, comps.nn);
-        }
-        //Annn
-        if (comps.c == 0xa) {
-            std.log.info("!!Annn!!\n", .{});
-            self.ldi(comps.nnn);
-        }
-        //fx0a
-        if (comps.c == 0xf and comps.y == 0x0 and comps.d == 0xa) {
+         },
+         0xE => {
+          if (comps.y == 0x9 and comps.d == 0xE) {
+            self.skpx(comps.x);
 
-            //self.ldxk(comps.x);
-        }
-        //fx18
-        if (comps.c == 0xf and comps.y == 0x1 and comps.d == 0x8) {
-            std.log.info("!!fx18!!\n", .{});
+          } else if (comps.y == 0xA and comps.d == 0x1) {
+            self.sknp(comps.x);
+          }
+          else {
+            return C8Error.UnImplemented;
+          }
+         },
+         
+         0xF => {
+          if (comps.y == 0x0 and comps.d == 0x7) {
+            self.ldxdt(comps.x);
+          } else if (comps.y == 0x0 and comps.d == 0xA) {
+            self.ldxk(comps.x);
+          } else if (comps.y == 0x1 and comps.d == 0x5) {
+            self.lddtx(comps.x);
+          } else if (comps.y == 0x1 and comps.d == 0x8) {
             self.ldstx(comps.x);
-        }
-
-        //fx29
-        if (comps.c == 0xf and comps.y == 0x2 and comps.d == 0x9) {
-            std.log.info("fx28\n", .{});
+          } else if (comps.y == 0x1 and comps.d == 0xE) {
+            self.addix(comps.x);
+          } else if (comps.y == 0x2 and comps.d == 0x9) {
             self.ldfx(comps.x);
-        }
-        if (comps.c == 0x0 and comps.x == 0x0 and comps.y == 0xE and comps.d == 0) {
-            self.drawfg = true;
-            std.log.info("!!cls!!\n", .{});
-            self.cls();
-        }
+          } else if (comps.y == 0x3 and comps.d == 0x3) {
+            self.ldbx(comps.x);
+          } else if (comps.y == 0x5 and comps.d == 0x5) {
+            self.ldix(comps.x);
+          } else if (comps.y == 0x6 and comps.d == 0x5) {
+            self.ldxi(comps.x);
+          } else {
+            return C8Error.UnImplemented;
+          }
+         },
 
-        //7xkk
-        if (comps.c == 0x7) {
-            std.log.info("7xkk\n", .{});
-            self.addx(comps.x, comps.nn);
+         else => return C8Error.UnImplemented
         }
 
         if (self.dt > 0) {
@@ -450,6 +478,8 @@ pub fn main() anyerror!void {
 
     // BEGIN CPU
     var cpu = Chip8{};
+
+    comptime @memcpy(cpu.mem[FONTSET_START_ADDRESS..], &FONTS, FONTS.len);
     if (std.os.argv.len > 1) {
         std.log.info("loading rom from {s}", .{std.os.argv[1]});
         const file = try std.fs.cwd().openFile(
@@ -461,18 +491,32 @@ pub fn main() anyerror!void {
         const n = try file.readAll(&data);
         cpu.loadRom(&data,n);
         //load fonts
-        comptime @memcpy(cpu.mem[FONTSET_START_ADDRESS..], &FONTS, FONTS.len);
     } else {
         std.log.info("no rom specified", .{});
     }
 
-    var flag = false;
+ var flag = false;
     var clock: f32 = 0;
     screenloop: while (!flag) {
         var event: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&event) != 0) {
             switch (event.type) {
                 c.SDL_QUIT => break :screenloop,
+                c.SDL_KEYDOWN => {
+                  for (SDL_KEYS) |key,idx| {
+                    if (event.key.keysym.sym == key) {
+                       cpu.keypad[idx] = 1;
+                    }
+
+                  }
+                },
+                c.SDL_KEYUP => {
+                  for (SDL_KEYS) |key,idx| {
+                    if (event.key.keysym.sym == key) {
+                       cpu.keypad[idx] = 0;
+                    }
+                  }
+                },
                 else => {},
             }
         }
@@ -491,18 +535,18 @@ pub fn main() anyerror!void {
         if (cpu.drawfg) {
           cpu.drawfg = false;
         var tt = [_]u32{0} ** (SCREEN_HEIGHT * SCREEN_WIDTH);
-        drawme(&cpu.fb, &tt);
+        drawMe(&cpu.fb, &tt);
         _ = c.SDL_UpdateTexture(texture, null, @ptrCast(*const anyopaque, &tt), SCREEN_WIDTH * @sizeOf(u32));
         _ = c.SDL_RenderCopy(renderer, texture, null, null);
         _ = c.SDL_RenderPresent(renderer);
 
-        std.log.info("{any}\n", .{tt});
+        //std.log.info("{any}\n", .{tt});
         }
     }
 }
 
 // draw me
-fn drawme(cpu_fb: *[SCREEN_WIDTH * SCREEN_HEIGHT]u8, target: *[SCREEN_WIDTH * SCREEN_HEIGHT]u32) void {
+fn drawMe(cpu_fb: *[SCREEN_WIDTH * SCREEN_HEIGHT]u8, target: *[SCREEN_WIDTH * SCREEN_HEIGHT]u32) void {
     for (target) |*val, idx| {
         if (cpu_fb[idx] == 0) {
             val.* = 0x000000FF;
@@ -518,8 +562,10 @@ test "sub x y test (8xy5)" {
     var cpu = Chip8{};
     cpu.v[0] = 0x2D;
     cpu.v[1] = 0x4B;
+    cpu.v[0xF] = 1;
     cpu.subxy(0, 1);
     try expectEqual(@as(u8, 0xE2), cpu.v[0]);
+    try expectEqual(@as(u8, 0), cpu.v[0xF]);
 }
 
 test "8xy4 test (addxy)" {
