@@ -238,8 +238,8 @@ const Chip8 = struct {
     }
     //dxyn
     fn drwxyn(self: *Chip8, x: u8, y: u8, nibble: u8) void {
-        var xpos = self.v[x];
-        var ypos = self.v[y];
+        var xpos = self.v[x] % SCREEN_WIDTH;
+        var ypos = self.v[y] % SCREEN_HEIGHT;
         self.v[0xF] = 0;
         var row: u8 = 0;
 
