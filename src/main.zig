@@ -10,8 +10,8 @@ const MEM_SIZE: u16 = 0x1000;
 const SCREEN_WIDTH: u16 = 64;
 const SCREEN_HEIGHT: u16 = 32;
 const FONTSET_START_ADDRESS: u16 = 0x50;
-const FPS = 240;
-const font = [_]u8{
+const FPS = 14;
+const FONTS = [_]u8{
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
     0x20, 0x60, 0x20, 0x20, 0x70, // 1
     0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
@@ -57,6 +57,7 @@ const Chip8 = struct {
     fb: [SCREEN_HEIGHT * SCREEN_WIDTH]u8 = [_]u8{0} ** (SCREEN_HEIGHT * SCREEN_WIDTH),
     tone: bool = false,
     time: isize = 0,
+    drawfg: bool = false,
 
     // Utility Function
     fn read_opcode(self: *Chip8) u16 {
@@ -327,8 +328,8 @@ const Chip8 = struct {
         }
     }
 
-    fn loadRom(self: *Chip8, data: []const u8) void {
-        @memcpy(self.mem[0x200..], @ptrCast([*]const u8, data[0..]), data.len);
+    fn loadRom(self: *Chip8, data: [*]const u8, len: u64) void {
+        @memcpy(self.mem[0x200..], data, len);
         self.pc = 0x200;
     }
 
@@ -370,6 +371,7 @@ const Chip8 = struct {
         }
         //dxyn
         if (comps.c == 0xD) {
+            self.drawfg = true;
             std.log.info("DRW..\n", .{});
             self.drwxyn(comps.x, comps.y, comps.d);
         }
@@ -400,6 +402,7 @@ const Chip8 = struct {
             self.ldfx(comps.x);
         }
         if (comps.c == 0x0 and comps.x == 0x0 and comps.y == 0xE and comps.d == 0) {
+            self.drawfg = true;
             std.log.info("!!cls!!\n", .{});
             self.cls();
         }
@@ -442,7 +445,7 @@ pub fn main() anyerror!void {
         return error.SDLInitializationFailed;
     };
     defer c.SDL_DestroyRenderer(renderer);
-    const texture = c.SDL_CreateTexture(renderer, c.SDL_PIXELFORMAT_RGBA8888, c.SDL_TEXTUREACCESS_STATIC, SCREEN_WIDTH, SCREEN_HEIGHT);
+    const texture = c.SDL_CreateTexture(renderer, c.SDL_PIXELFORMAT_RGBA8888, c.SDL_TEXTUREACCESS_STREAMING, SCREEN_WIDTH, SCREEN_HEIGHT);
     defer c.SDL_DestroyTexture(texture);
 
     // BEGIN CPU
@@ -456,22 +459,16 @@ pub fn main() anyerror!void {
         defer file.close();
         var data: [4096]u8 = undefined;
         const n = try file.readAll(&data);
-        cpu.loadRom(data[0..n]);
+        cpu.loadRom(&data,n);
+        //load fonts
+        comptime @memcpy(cpu.mem[FONTSET_START_ADDRESS..], &FONTS, FONTS.len);
     } else {
         std.log.info("no rom specified", .{});
     }
 
     var flag = false;
-    //RM
-    //cpu.fb = [_]u16 {120} ** (SCREEN_WIDTH * SCREEN_HEIGHT * @sizeOf(u32));
-    // var tt =  [_]u8 {0} ** (SCREEN_HEIGHT * SCREEN_WIDTH * @sizeOf(u32));
-    var tt = [_]u32{0} ** (SCREEN_HEIGHT * SCREEN_WIDTH);
     var clock: f32 = 0;
     screenloop: while (!flag) {
-        _ = c.SDL_UpdateTexture(texture, null, @ptrCast(*const anyopaque, &tt), SCREEN_WIDTH * @sizeOf(u32));
-        _ = c.SDL_RenderCopy(renderer, texture, null, null);
-        _ = c.SDL_RenderPresent(renderer);
-        //screen.update_sdl(&tt, SCREEN_WIDTH * @sizeOf(u32));
         var event: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&event) != 0) {
             switch (event.type) {
@@ -490,13 +487,22 @@ pub fn main() anyerror!void {
         } else {
             clock = new_clock + delta_ticks;
         }
+        //start drawing
+        if (cpu.drawfg) {
+          cpu.drawfg = false;
+        var tt = [_]u32{0} ** (SCREEN_HEIGHT * SCREEN_WIDTH);
         drawme(&cpu.fb, &tt);
+        _ = c.SDL_UpdateTexture(texture, null, @ptrCast(*const anyopaque, &tt), SCREEN_WIDTH * @sizeOf(u32));
+        _ = c.SDL_RenderCopy(renderer, texture, null, null);
+        _ = c.SDL_RenderPresent(renderer);
+
         std.log.info("{any}\n", .{tt});
+        }
     }
 }
 
 // draw me
-fn drawme(cpu_fb: *[2048]u8, target: *[2048]u32) void {
+fn drawme(cpu_fb: *[SCREEN_WIDTH * SCREEN_HEIGHT]u8, target: *[SCREEN_WIDTH * SCREEN_HEIGHT]u32) void {
     for (target) |*val, idx| {
         if (cpu_fb[idx] == 0) {
             val.* = 0x000000FF;
